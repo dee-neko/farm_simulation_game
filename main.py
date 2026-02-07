@@ -47,13 +47,19 @@ LIVESTOCK_TYPES = [
     LivestockType("ウシ", "ミルク"),
 ]
 
+GRID_WIDTH = 8
+GRID_HEIGHT = 6
+FIELD_POSITIONS = [(2, 1), (3, 1), (2, 2), (3, 2)]
+BARN_POSITION = (6, 4)
+
 
 class GameState:
     def __init__(self) -> None:
         self.day = 1
         self.day_limit = 10
-        self.actions_per_day = 2
-        self.fields = [FieldPlot() for _ in range(4)]
+        self.actions_per_day = 3
+        self.player_pos = (0, 0)
+        self.fields = {pos: FieldPlot() for pos in FIELD_POSITIONS}
         self.livestock = [
             Livestock(LIVESTOCK_TYPES[0]),
             Livestock(LIVESTOCK_TYPES[0]),
@@ -77,30 +83,50 @@ class GameState:
     def goal_met(self) -> bool:
         return all(self.inventory.get(item, 0) >= amount for item, amount in self.goal.items())
 
-    def print_status(self) -> None:
-        print("\n=== ステータス ===")
-        print(f"日数: {self.day}/{self.day_limit}")
-        print("畑の状態:")
-        for i, plot in enumerate(self.fields, start=1):
-            if plot.crop is None:
-                status = "空き"
-            elif plot.is_ready(self.day):
-                status = f"{plot.crop.name} (収穫OK)"
+
+def print_status(state: GameState) -> None:
+    print("\n=== ステータス ===")
+    print(f"日数: {state.day}/{state.day_limit}")
+    print(f"現在地: {state.player_pos}")
+    print("畑の状態:")
+    for pos, plot in state.fields.items():
+        if plot.crop is None:
+            status = "空き"
+        elif plot.is_ready(state.day):
+            status = f"{plot.crop.name} (収穫OK)"
+        else:
+            remaining = plot.crop.grow_days - (state.day - plot.planted_day)
+            status = f"{plot.crop.name} (あと{remaining}日)"
+        print(f"  {pos}: {status}")
+    print("家畜の状態:")
+    for i, animal in enumerate(state.livestock, start=1):
+        hunger_state = "元気" if animal.hunger == 0 else f"空腹 {animal.hunger}日目"
+        print(f"  {i}. {animal.livestock_type.name}: {hunger_state}")
+    print("所持品:")
+    for item, amount in state.inventory.items():
+        print(f"  {item}: {amount}")
+    print("目標:")
+    for item, amount in state.goal.items():
+        print(f"  {item}: {amount}")
+    print("=================\n")
+
+
+def render_map(state: GameState) -> None:
+    print("\n=== 農場マップ ===")
+    for y in range(GRID_HEIGHT):
+        row = []
+        for x in range(GRID_WIDTH):
+            pos = (x, y)
+            if pos == state.player_pos:
+                row.append("@")
+            elif pos in state.fields:
+                row.append("F")
+            elif pos == BARN_POSITION:
+                row.append("B")
             else:
-                remaining = plot.crop.grow_days - (self.day - plot.planted_day)
-                status = f"{plot.crop.name} (あと{remaining}日)"
-            print(f"  {i}. {status}")
-        print("家畜の状態:")
-        for i, animal in enumerate(self.livestock, start=1):
-            hunger_state = "元気" if animal.hunger == 0 else f"空腹 {animal.hunger}日目"
-            print(f"  {i}. {animal.livestock_type.name}: {hunger_state}")
-        print("所持品:")
-        for item, amount in self.inventory.items():
-            print(f"  {item}: {amount}")
-        print("目標:")
-        for item, amount in self.goal.items():
-            print(f"  {item}: {amount}")
-        print("=================\n")
+                row.append(".")
+        print(" ".join(row))
+    print("凡例: @=主人公, F=畑, B=牧舎, .=道\n")
 
 
 def prompt_choice(prompt: str, choices: list[str]) -> int:
@@ -116,30 +142,33 @@ def prompt_choice(prompt: str, choices: list[str]) -> int:
         print("入力が正しくありません。もう一度お試しください。\n")
 
 
-def plant_crop(state: GameState) -> None:
-    empty_plots = [i for i, plot in enumerate(state.fields) if plot.crop is None]
-    if not empty_plots:
-        print("畑に空きがありません。収穫してから植えましょう。")
-        return
+def move_player(state: GameState) -> None:
+    directions = {
+        "W": (0, -1),
+        "A": (-1, 0),
+        "S": (0, 1),
+        "D": (1, 0),
+    }
+    while True:
+        move = input("移動 (W/A/S/D) を入力: ").strip().upper()
+        if move in directions:
+            dx, dy = directions[move]
+            new_x = max(0, min(GRID_WIDTH - 1, state.player_pos[0] + dx))
+            new_y = max(0, min(GRID_HEIGHT - 1, state.player_pos[1] + dy))
+            state.player_pos = (new_x, new_y)
+            print(f"現在地: {state.player_pos}")
+            return
+        print("入力が正しくありません。W/A/S/Dで入力してください。\n")
+
+
+def plant_crop(state: GameState, plot: FieldPlot) -> None:
     crop_index = prompt_choice("植える作物を選んでください:", [c.name for c in CROPS])
-    plot_choices = [f"畑 {i + 1}" for i in empty_plots]
-    plot_index = prompt_choice("植える場所を選んでください:", plot_choices)
-    plot = state.fields[empty_plots[plot_index]]
     plot.crop = CROPS[crop_index]
     plot.planted_day = state.day
     print(f"{plot.crop.name}を植えました！")
 
 
-def harvest(state: GameState) -> None:
-    ready_plots = [i for i, plot in enumerate(state.fields) if plot.is_ready(state.day)]
-    if not ready_plots:
-        print("収穫できる作物がありません。")
-        return
-    plot_choices = [
-        f"畑 {i + 1}: {state.fields[i].crop.name}" for i in ready_plots
-    ]
-    plot_index = prompt_choice("収穫する作物を選んでください:", plot_choices)
-    plot = state.fields[ready_plots[plot_index]]
+def harvest(state: GameState, plot: FieldPlot) -> None:
     crop_name = plot.crop.name
     state.inventory[crop_name] = state.inventory.get(crop_name, 0) + 1
     plot.crop = None
@@ -164,6 +193,22 @@ def feed_animals(state: GameState) -> None:
         print("エサをあげられる家畜がいませんでした。")
 
 
+def interact(state: GameState) -> None:
+    if state.player_pos in state.fields:
+        plot = state.fields[state.player_pos]
+        if plot.crop is None:
+            plant_crop(state, plot)
+        elif plot.is_ready(state.day):
+            harvest(state, plot)
+        else:
+            remaining = plot.crop.grow_days - (state.day - plot.planted_day)
+            print(f"{plot.crop.name}は成長中です。(あと{remaining}日)")
+    elif state.player_pos == BARN_POSITION:
+        feed_animals(state)
+    else:
+        print("ここでは特にできることがありません。")
+
+
 def end_day(state: GameState) -> None:
     for animal in state.livestock:
         animal.pass_day()
@@ -181,29 +226,26 @@ def main() -> None:
     while state.day <= state.day_limit:
         actions_left = state.actions_per_day
         while actions_left > 0:
+            render_map(state)
             print(f"残り行動回数: {actions_left}")
             choice = prompt_choice(
                 "行動を選んでください:",
                 [
-                    "作物を植える",
-                    "作物を収穫する",
-                    "家畜にエサをあげる",
+                    "移動する",
+                    "その場で作業する",
                     "ステータス確認",
                     "行動を終了する",
                 ],
             )
             if choice == 0:
-                plant_crop(state)
+                move_player(state)
                 actions_left -= 1
             elif choice == 1:
-                harvest(state)
+                interact(state)
                 actions_left -= 1
             elif choice == 2:
-                feed_animals(state)
-                actions_left -= 1
+                print_status(state)
             elif choice == 3:
-                state.print_status()
-            elif choice == 4:
                 actions_left = 0
 
             if state.goal_met():
@@ -216,7 +258,7 @@ def main() -> None:
         print("\n制限日数ギリギリで目標達成！素晴らしい成果です！\n")
     else:
         print("\n時間切れです。次はもっと計画的に挑戦しましょう。\n")
-        state.print_status()
+        print_status(state)
 
 
 if __name__ == "__main__":
